@@ -2,7 +2,7 @@ import os
 import json
 import uuid
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import boto3
 from dotenv import load_dotenv
 
@@ -28,7 +28,20 @@ client = boto3.client(
 
 # ---------- Request Model (Swagger sees ONLY this) ----------
 class AgentRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(
+        ...,
+        example="Type your prompt here"
+    )
+    session_id: str | None = Field(
+        default=None,
+        example="user-session-00000000000000000001",
+        description=(
+            "Enter a session id with at least 34 characters. "
+            "Use the SAME session_id for subsequent requests to maintain conversation context."
+        )
+    )
+
+
 
 
 # ---------- Helpers ----------
@@ -36,20 +49,25 @@ def generate_actor_id() -> str:
     # Later: replace with auth user id / API key owner
     return "public-user"
 
+def get_session_id(req: AgentRequest) -> str:
+    if req.session_id and len(req.session_id) >= 33:
+        return req.session_id
+    
+    # fallback default session
+    return "public-session-000000000000000000000"
 
-def generate_session_id() -> str:
-    """
-    Bedrock Agent Core requires runtimeSessionId >= 33 chars
-    """
-    return f"session-{uuid.uuid4().hex}"  # ~39 chars
 
 
 # ---------- API ----------
-@app.post("/chat")
+@app.post(
+    "/chat",
+    summary="Chat with the Customer Care AI Agent",
+    description="Send a prompt to the AI agent. Reuse the same session_id across requests to maintain conversation context."
+)
 def chat(req: AgentRequest):
     try:
-        actor_id = generate_actor_id()
-        session_id = generate_session_id()
+        actor_id = "public-user"
+        session_id = get_session_id(req)
 
         payload = json.dumps({
             "prompt": req.prompt,
@@ -66,12 +84,8 @@ def chat(req: AgentRequest):
         response_body = response["response"].read()
         data = json.loads(response_body)
 
-        # Extract clean values
-        response1 = data.get("result", {})
+        return {"result": data["result"], "session_id": session_id}
 
-        return {
-            "result": response1
-        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
